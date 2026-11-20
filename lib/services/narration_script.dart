@@ -20,6 +20,7 @@ const String _body = r'''
   MO.cur = MO.cur || null;
   MO.curWord = MO.curWord || null;
   MO.wordSpans = MO.wordSpans || null;
+  MO.gapSpans = MO.gapSpans || null;
   MO.wordMode = MO.wordMode || false;
   MO.curSentStart = -1;
   MO.curSentEnd = -1;
@@ -92,10 +93,9 @@ const String _body = r'''
     }
     return '.absorb-mo-on, .absorb-mo-on * { color: ' + MO.color + ' !important;' +
       ' transition: color 180ms ease; }' +
-      '.absorb-mo-s-w { background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.11);' +
-      ' border-radius: 2px; }' +
+      '.absorb-mo-s-w { background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.24); }' +
       '.absorb-mo-w-on, .absorb-mo-w-on * { color: ' + MO.color + ' !important;' +
-      ' background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.28);' +
+      ' background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.45);' +
       ' border-radius: 3px; transition: color 120ms ease, background-color 120ms ease; }';
   };
 
@@ -192,17 +192,25 @@ const String _body = r'''
       try { MO.curWord.classList.remove('absorb-mo-w-on'); } catch (e) {}
       MO.curWord = null;
     }
-    if (MO.wordSpans && MO.wordSpans.length) {
-      for (var i = 0; i < MO.wordSpans.length; i++) {
-        var sp = MO.wordSpans[i];
+    var unwrap = function(list) {
+      if (!list || !list.length) return;
+      for (var i = 0; i < list.length; i++) {
+        var sp = list[i];
         var p = sp && sp.parentNode;
         if (!p) continue;
         while (sp.firstChild) p.insertBefore(sp.firstChild, sp);
         p.removeChild(sp);
       }
-      try { if (MO.cur) MO.cur.normalize(); } catch (e) {}
+    };
+    unwrap(MO.wordSpans);
+    if (MO.gapSpans) {
+      var gaps = [];
+      for (var k = 0; k < MO.gapSpans.length; k++) gaps.push(MO.gapSpans[k].sp);
+      unwrap(gaps);
     }
+    try { if (MO.cur) MO.cur.normalize(); } catch (e) {}
     MO.wordSpans = null;
+    MO.gapSpans = null;
     MO.wordMode = false;
     MO.curSentStart = -1;
     MO.curSentEnd = -1;
@@ -224,6 +232,7 @@ const String _body = r'''
     }
     collect(el);
     var spans = [];
+    var gaps = [];
     for (var i = 0; i < nodes.length; i++) {
       var n = nodes[i], txt = n.nodeValue, parent = n.parentNode;
       if (!parent || !txt) continue;
@@ -232,7 +241,18 @@ const String _body = r'''
       while ((m = MO.WORD_RE.exec(txt)) !== null) {
         if (!MO.normWord(m[0])) continue;
         if (!frag) frag = doc.createDocumentFragment();
-        if (m.index > last) frag.appendChild(doc.createTextNode(txt.slice(last, m.index)));
+        if (m.index > last) {
+          var gapText = txt.slice(last, m.index);
+          if (spans.length > 0) {
+            var gsp = doc.createElement('span');
+            gsp.className = 'absorb-mo-g';
+            gsp.textContent = gapText;
+            frag.appendChild(gsp);
+            gaps.push({ sp: gsp, prev: spans.length - 1 });
+          } else {
+            frag.appendChild(doc.createTextNode(gapText));
+          }
+        }
         var sp = doc.createElement('span');
         sp.className = 'absorb-mo-w';
         sp.textContent = m[0];
@@ -241,10 +261,22 @@ const String _body = r'''
         last = m.index + m[0].length;
       }
       if (frag) {
-        if (last < txt.length) frag.appendChild(doc.createTextNode(txt.slice(last)));
+        if (last < txt.length) {
+          var tail = txt.slice(last);
+          if (spans.length > 0) {
+            var tsp = doc.createElement('span');
+            tsp.className = 'absorb-mo-g';
+            tsp.textContent = tail;
+            frag.appendChild(tsp);
+            gaps.push({ sp: tsp, prev: spans.length - 1 });
+          } else {
+            frag.appendChild(doc.createTextNode(tail));
+          }
+        }
         parent.replaceChild(frag, n);
       }
     }
+    MO.gapSpans = gaps;
     return spans;
   };
 
@@ -289,6 +321,16 @@ const String _body = r'''
         if (s0 >= 0 && s1 >= s0) {
           for (var j = s0; j <= s1; j++) {
             try { MO.wordSpans[j].classList.add('absorb-mo-s-w'); } catch (e) {}
+          }
+        }
+        if (MO.gapSpans) {
+          for (var g = 0; g < MO.gapSpans.length; g++) {
+            var gs = MO.gapSpans[g];
+            var inSent = s0 >= 0 && s1 > s0 && gs.prev >= s0 && gs.prev < s1;
+            try {
+              if (inSent) gs.sp.classList.add('absorb-mo-s-w');
+              else gs.sp.classList.remove('absorb-mo-s-w');
+            } catch (e) {}
           }
         }
         MO.curSentStart = s0;
