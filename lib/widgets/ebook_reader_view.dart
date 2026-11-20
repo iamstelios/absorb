@@ -330,6 +330,8 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
   MediaOverlay? _narration;
   bool _narrationReadAlong = false;
   OverlayClip? _narrationWentTo;
+  OverlayClip? _narrationLastClip;
+  int? _narrationLastWordIdx;
   DateTime _narrationTurnAt = DateTime.fromMillisecondsSinceEpoch(0);
   bool _narrationTickBusy = false;
   int _narrationRouteTick = 0;
@@ -343,12 +345,13 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
   bool _audioIsNarration = false;
 
   /// Read along can follow the narration when the book's audio is that
-  /// narration: BookOrbit plays it as the audio, and an Audiobookshelf
-  /// ebook-only book has it fetched out of the EPUB. On BookOrbit it also
-  /// follows a read along EPUB laid on the audiobook beside it. Any other
+  /// narration: BookOrbit plays it as the audio, an Audiobookshelf
+  /// ebook-only book has it fetched out of the EPUB, or a sidecar `.smil`
+  /// aligns the EPUB to the item's Audiobookshelf audiobook. Any other
   /// book with its own audiobook keeps transcription.
   bool get _useNarration =>
-      _narration != null && (_narrationFromServer || !_hasAudio || _audioIsNarration);
+      _narration != null &&
+      (_narration!.isSidecar || _narrationFromServer || !_hasAudio || _audioIsNarration);
 
   /// Whether the page and the audio may move each other. A book with its own
   /// audiobook beside a read along EPUB does that only with Sync reading and
@@ -1382,7 +1385,7 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
 
   String _barButtonLabel(AppLocalizations l, String id) => switch (id) {
         'bookmark' => l.bookmark,
-        'readalong' => l.readAlong,
+        'readalong' => _narration?.isSidecar == true ? '${l.readAlong} (SMIL)' : l.readAlong,
         'notes' => l.readerBarNotes,
         'autoscroll' => l.readerAutoScroll,
         'chapters' => l.chapters,
@@ -1407,8 +1410,39 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
   }
 
   Widget _barButton(String id, Color fg, Color accent) {
+    final lit = _barButtonLit(id);
+    Widget icon = Icon(_barButtonIcon(id), color: lit ? accent : fg);
+    if (id == 'readalong' && _narration?.isSidecar == true) {
+      icon = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          icon,
+          Positioned(
+            right: -6,
+            bottom: -4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
+              decoration: BoxDecoration(
+                color: lit ? accent : fg.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(
+                'SMIL',
+                style: TextStyle(
+                  fontSize: 7,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: lit ? Colors.black : Theme.of(context).scaffoldBackgroundColor,
+                  height: 1.1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     final button = IconButton(
-      icon: Icon(_barButtonIcon(id), color: _barButtonLit(id) ? accent : fg),
+      icon: icon,
       // No tooltip on auto scroll: its long press opens the sleep timer.
       tooltip: id == 'autoscroll' ? null : _barButtonLabel(AppLocalizations.of(context)!, id),
       onPressed: () => _runBarButton(id),
@@ -5228,6 +5262,13 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
       if (!player.isPlaying) await player.play(fromUi: true);
       return true;
     }
+    if (n?.isSidecar == true) {
+      final ok = await _ensureThisBookPlaying();
+      if (ok && from != null && n != null) {
+        await player.seekTo(Duration(milliseconds: (n.startOf(from) * 1000).round()));
+      }
+      return ok;
+    }
     final api = context.read<AuthProvider>().apiService;
     if (api == null) return false;
     final cover = context.read<LibraryProvider>().getCoverUrl(widget.itemId);
@@ -5441,9 +5482,12 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
     ScreenWake.hold('reader', true);
     await LyricsService.instance.refreshRoute();
     _narrationLastPos = -1;
+    _narrationLastClip = null;
+    _narrationLastWordIdx = null;
     _readAlongTimer?.cancel();
     _readAlongTimer = Timer.periodic(
-        const Duration(milliseconds: 150), (_) => _narrationTick());
+        Duration(milliseconds: _narration?.isSidecar == true ? 100 : 150),
+        (_) => _narrationTick());
     debugPrint('[ReadAlong] following the narration for ${widget.itemId}');
   }
 
@@ -5475,6 +5519,14 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
       _sentenceFollowClip(clip);
       return;
     }
+    final wordIdx = clip.hasWords ? clip.wordIndexAt(heard - n.tracks[clip.track].start) : null;
+    if (!force &&
+        !seeked &&
+        identical(clip, _narrationLastClip) &&
+        wordIdx == _narrationLastWordIdx &&
+        _narrationWhere == 'on') {
+      return;
+    }
     final wc = _epubController?.webViewController;
     if (wc == null) return;
     _narrationTickBusy = true;
@@ -5484,14 +5536,19 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
         await wc.evaluateJavascript(
             source: 'window.__absorbMO && __absorbMO.setColor("${cssHex(_readAlongColor)}")');
       }
+      final wArg = wordIdx ?? -1;
+      final sentStart = clip.hasWords ? clip.wordOffset : -1;
+      final sentEnd = clip.hasWords ? clip.wordOffset + clip.words.length - 1 : -1;
       var where = await wc.evaluateJavascript(
-          source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}) : ""');
+          source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg, $sentStart, $sentEnd) : ""');
       if (where == '' || where == null) {
         // A layout change remounts the page and its script goes with it.
         await wc.evaluateJavascript(source: _narrationBootstrapSource());
         where = await wc.evaluateJavascript(
-            source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}) : ""');
+            source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg, $sentStart, $sentEnd) : ""');
       }
+      _narrationLastClip = clip;
+      _narrationLastWordIdx = wordIdx;
       if (where is String && where != _narrationWhere && mounted) {
         setState(() => _narrationWhere = where as String);
       }
@@ -5536,7 +5593,7 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
         debugPrint('[ReadAlong] narration moved to ${clip.textHref}#$id');
         await wc.evaluateJavascript(
             source: 'window.__absorbMO && __absorbMO.go(${jsonEncode(clip.textHref)}, ${jsonEncode(id)})');
-      } else if (where == 'on') {
+      } else if (where == 'on' && wordIdx == null) {
         // The sentence starts on this page but may run onto the next. The
         // voice is placed in its text by time, so the page turns once the
         // part being heard is over there, instead of waiting at the last

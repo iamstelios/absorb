@@ -96,33 +96,44 @@ List<_FileEntry> _entriesFor(Map<String, dynamic> item) {
       size: (meta['size'] as num?)?.toInt(),
     ));
   }
+  final libraryFiles = (item['libraryFiles'] as List<dynamic>? ?? const []).whereType<Map>().toList();
+  final hasSidecarSmil = libraryFiles.any((lf) {
+    final meta = lf['metadata'] as Map? ?? const {};
+    final ext = (meta['ext'] as String? ?? '').toLowerCase();
+    final name = (meta['filename'] as String? ?? meta['path'] as String? ?? '').toLowerCase();
+    return ext == '.smil' || name.endsWith('.smil');
+  });
   final ebook = media['ebookFile'] as Map?;
   if (ebook != null) {
     final meta = ebook['metadata'] as Map? ?? const {};
     seen.add('${ebook['ino']}');
     final id = item['id'];
+    final fmt = (ebook['ebookFormat'] as String?) ?? _extOf(meta);
     entries.add(_FileEntry(
       kind: _FileKind.ebook,
       id: ebook['ino']?.toString(),
       name: '${meta['filename'] ?? ''}',
       path: meta['relPath'] as String? ?? meta['path'] as String?,
-      format: (ebook['ebookFormat'] as String?) ?? _extOf(meta),
+      format: fmt,
       size: (meta['size'] as num?)?.toInt(),
-      readAlong: id is String && NarratedBooks.contains(id),
+      readAlong: (id is String && NarratedBooks.contains(id)) ||
+          (hasSidecarSmil && fmt?.toLowerCase() == 'epub'),
     ));
   }
-  for (final lf in (item['libraryFiles'] as List<dynamic>? ?? const []).whereType<Map>()) {
+  for (final lf in libraryFiles) {
     if (seen.contains('${lf['ino']}')) continue;
     final meta = lf['metadata'] as Map? ?? const {};
     final type = lf['fileType'] as String?;
     if (type == 'audio') continue;
+    final fmt = _extOf(meta);
     entries.add(_FileEntry(
       kind: type == 'ebook' ? _FileKind.ebook : _FileKind.other,
       id: lf['ino']?.toString(),
       name: '${meta['filename'] ?? ''}',
       path: meta['relPath'] as String? ?? meta['path'] as String?,
-      format: _extOf(meta),
+      format: fmt,
       size: (meta['size'] as num?)?.toInt(),
+      readAlong: hasSidecarSmil && type == 'ebook' && fmt?.toLowerCase() == 'epub',
       role: type,
     ));
   }
