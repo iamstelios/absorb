@@ -21,6 +21,8 @@ const String _body = r'''
   MO.curWord = MO.curWord || null;
   MO.wordSpans = MO.wordSpans || null;
   MO.wordMode = MO.wordMode || false;
+  MO.curSentStart = -1;
+  MO.curSentEnd = -1;
 
   MO.SYNC_BLOCKS = {
     p:1, h1:1, h2:1, h3:1, h4:1, h5:1, h6:1, li:1, dd:1, dt:1, td:1, th:1,
@@ -83,14 +85,18 @@ const String _body = r'''
 
   MO.css = function() {
     if (MO.eink) {
-      return '.absorb-mo-on, .absorb-mo-w-on { text-decoration: underline;' +
-        ' text-decoration-thickness: 2px; text-underline-offset: 3px; }';
+      return '.absorb-mo-on, .absorb-mo-s-w { text-decoration: underline;' +
+        ' text-decoration-thickness: 1px; text-underline-offset: 3px; }' +
+        '.absorb-mo-w-on { text-decoration: underline;' +
+        ' text-decoration-thickness: 3px; text-underline-offset: 3px; }';
     }
     return '.absorb-mo-on, .absorb-mo-on * { color: ' + MO.color + ' !important;' +
       ' transition: color 180ms ease; }' +
+      '.absorb-mo-s-w { background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.11);' +
+      ' border-radius: 2px; }' +
       '.absorb-mo-w-on, .absorb-mo-w-on * { color: ' + MO.color + ' !important;' +
-      ' background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.16);' +
-      ' border-radius: 3px; transition: color 120ms ease; }';
+      ' background-color: rgba(' + (MO.rgb || '100, 150, 255') + ', 0.28);' +
+      ' border-radius: 3px; transition: color 120ms ease, background-color 120ms ease; }';
   };
 
   MO.style = function(doc) {
@@ -198,6 +204,8 @@ const String _body = r'''
     }
     MO.wordSpans = null;
     MO.wordMode = false;
+    MO.curSentStart = -1;
+    MO.curSentEnd = -1;
   };
 
   MO.wrapWords = function(el) {
@@ -252,7 +260,7 @@ const String _body = r'''
   // near the bottom of a scroll), 'before' or 'after' when it is on the page
   // next to it, 'far-before' or 'far-after' when it is further along the
   // section, 'missing' when its section isn't loaded.
-  MO.show = function(href, id, wordIndex) {
+  MO.show = function(href, id, wordIndex, sentStart, sentEnd) {
     var el = MO.find(href, id);
     if (!el) { MO.clear(); return 'missing'; }
     var wantWords = typeof wordIndex === 'number' && wordIndex >= 0;
@@ -269,7 +277,24 @@ const String _body = r'''
     }
     var target = el;
     if (wantWords && MO.wordSpans && MO.wordSpans.length) {
-      var idx = Math.max(0, Math.min(MO.wordSpans.length - 1, wordIndex));
+      var len = MO.wordSpans.length;
+      var s0 = (typeof sentStart === 'number' && sentStart >= 0) ? Math.min(len - 1, sentStart) : -1;
+      var s1 = (typeof sentEnd === 'number' && sentEnd >= s0) ? Math.min(len - 1, sentEnd) : -1;
+      if (s0 !== MO.curSentStart || s1 !== MO.curSentEnd) {
+        if (MO.curSentStart >= 0) {
+          for (var i = MO.curSentStart; i <= MO.curSentEnd && i < len; i++) {
+            try { MO.wordSpans[i].classList.remove('absorb-mo-s-w'); } catch (e) {}
+          }
+        }
+        if (s0 >= 0 && s1 >= s0) {
+          for (var j = s0; j <= s1; j++) {
+            try { MO.wordSpans[j].classList.add('absorb-mo-s-w'); } catch (e) {}
+          }
+        }
+        MO.curSentStart = s0;
+        MO.curSentEnd = s1;
+      }
+      var idx = Math.max(0, Math.min(len - 1, wordIndex));
       var w = MO.wordSpans[idx];
       if (MO.curWord !== w) {
         if (MO.curWord) {

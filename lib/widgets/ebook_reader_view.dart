@@ -1385,7 +1385,7 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
 
   String _barButtonLabel(AppLocalizations l, String id) => switch (id) {
         'bookmark' => l.bookmark,
-        'readalong' => l.readAlong,
+        'readalong' => _narration?.isSidecar == true ? '${l.readAlong} (SMIL)' : l.readAlong,
         'notes' => l.readerBarNotes,
         'autoscroll' => l.readerAutoScroll,
         'chapters' => l.chapters,
@@ -1410,8 +1410,39 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
   }
 
   Widget _barButton(String id, Color fg, Color accent) {
+    final lit = _barButtonLit(id);
+    Widget icon = Icon(_barButtonIcon(id), color: lit ? accent : fg);
+    if (id == 'readalong' && _narration?.isSidecar == true) {
+      icon = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          icon,
+          Positioned(
+            right: -6,
+            bottom: -4,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
+              decoration: BoxDecoration(
+                color: lit ? accent : fg.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(
+                'SMIL',
+                style: TextStyle(
+                  fontSize: 7,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                  color: lit ? Colors.black : Theme.of(context).scaffoldBackgroundColor,
+                  height: 1.1,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
     final button = IconButton(
-      icon: Icon(_barButtonIcon(id), color: _barButtonLit(id) ? accent : fg),
+      icon: icon,
       // No tooltip on auto scroll: its long press opens the sleep timer.
       tooltip: id == 'autoscroll' ? null : _barButtonLabel(AppLocalizations.of(context)!, id),
       onPressed: () => _runBarButton(id),
@@ -5506,13 +5537,15 @@ class EbookReaderViewState extends State<EbookReaderView> with WidgetsBindingObs
             source: 'window.__absorbMO && __absorbMO.setColor("${cssHex(_readAlongColor)}")');
       }
       final wArg = wordIdx ?? -1;
+      final sentStart = clip.hasWords ? clip.wordOffset : -1;
+      final sentEnd = clip.hasWords ? clip.wordOffset + clip.words.length - 1 : -1;
       var where = await wc.evaluateJavascript(
-          source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg) : ""');
+          source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg, $sentStart, $sentEnd) : ""');
       if (where == '' || where == null) {
         // A layout change remounts the page and its script goes with it.
         await wc.evaluateJavascript(source: _narrationBootstrapSource());
         where = await wc.evaluateJavascript(
-            source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg) : ""');
+            source: 'window.__absorbMO ? __absorbMO.show(${jsonEncode(clip.textHref)}, ${jsonEncode(id)}, $wArg, $sentStart, $sentEnd) : ""');
       }
       _narrationLastClip = clip;
       _narrationLastWordIdx = wordIdx;
